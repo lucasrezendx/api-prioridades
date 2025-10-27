@@ -27,9 +27,9 @@ def inserir_agencia_exemplo():
     conn = sqlite3.connect(DB)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO prioridades (agencia, processo_id, prioridade, data)
-        VALUES (?, ?, ?, ?)
-    """, ("Agência Central", "PROC12345", "sim", "2025-10-27"))
+        INSERT INTO prioridades (agencia, processo_id, prioridade)
+        VALUES (?, ?, ?)
+    """, ("Agência Central", "PROC12345", "sim"))
     conn.commit()
     conn.close()
     print("Agência de exemplo inserida com sucesso!")
