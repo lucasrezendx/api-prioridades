@@ -23,7 +23,21 @@ def init_db():
     conn.commit()
     conn.close()
 
+def inserir_agencia_exemplo():
+    conn = sqlite3.connect(DB)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO prioridades (agencia, processo_id, prioridade, data)
+        VALUES (?, ?, ?, ?)
+    """, ("Agência Central", "PROC12345", "sim", "2025-10-27"))
+    conn.commit()
+    conn.close()
+    print("Agência de exemplo inserida com sucesso!")
+
+# Executando as funções
 init_db()
+inserir_agencia_exemplo()    
+
 
 # ------------------------------------------------------
 # 📅 Conta quantas prioridades "sim" uma agência teve nos últimos 7 dias
@@ -127,3 +141,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080, debug=True)
     # Se quiser expor em um container, use:
     # app.run(host="0.0.0.0", port=8080, debug=True)
+
