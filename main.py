@@ -80,5 +80,26 @@ def registrar_prioridade():
         "possui5": possui5
     })
 
+# 🔹 Novo endpoint: lista todas as agências registradas no banco
+@app.route("/listar_agencias", methods=["GET"])
+def listar_agencias():
+    conn = sqlite3.connect(DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT agencia FROM prioridades")
+    agencias = [row[0] for row in cursor.fetchall()]
+    conn.close()
+
+    resultado = []
+    for agencia in agencias:
+        total = contar_prioridades_semana(agencia)
+        possui5 = "sim" if total >= 5 else "não"
+        resultado.append({
+            "agencia": agencia,
+            "total_semana": total,
+            "possui5": possui5
+        })
+
+    return jsonify(resultado)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
