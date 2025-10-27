@@ -1,8 +1,12 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from datetime import datetime, timedelta
 import sqlite3
+import os
 
 app = Flask(__name__)
+CORS(app)  # Permite acesso de outros domínios (ex: React, etc.)
+
 DB = "prioridades.db"
 
 # ------------------------------------------------------
@@ -23,21 +27,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-def inserir_agencia_exemplo():
-    conn = sqlite3.connect(DB)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO prioridades (agencia, processo_id, prioridade)
-        VALUES (?, ?, ?)
-    """, ("Agência Central", "PROC12345", "sim"))
-    conn.commit()
-    conn.close()
-    print("Agência de exemplo inserida com sucesso!")
-
-# Executando as funções
-init_db()
-inserir_agencia_exemplo()    
-
 
 # ------------------------------------------------------
 # 📅 Conta quantas prioridades "sim" uma agência teve nos últimos 7 dias
@@ -54,6 +43,7 @@ def contar_prioridades_semana(agencia):
     conn.close()
     return total
 
+
 # ------------------------------------------------------
 # 🔎 Consulta a quantidade de prioridades por agência
 # ------------------------------------------------------
@@ -66,6 +56,7 @@ def consultar_prioridades(agencia):
         "total_semana": total,
         "possui5": possui5
     })
+
 
 # ------------------------------------------------------
 # 📝 Registra uma prioridade
@@ -114,6 +105,7 @@ def registrar_prioridade():
         "possui5": possui5
     })
 
+
 # ------------------------------------------------------
 # 📋 Lista todas as agências registradas
 # ------------------------------------------------------
@@ -121,24 +113,16 @@ def registrar_prioridade():
 def listar_agencias():
     conn = sqlite3.connect(DB)
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM prioridades")
+    cursor.execute("SELECT DISTINCT agencia FROM prioridades")
     agencias = [row[0] for row in cursor.fetchall()]
     conn.close()
+    return jsonify(agencias)
 
-    resultado = []
-    for agencia in agencias:
-        resultado.append({
-            "id": agencia.id
-        })
-
-    return jsonify(resultado)
 
 # ------------------------------------------------------
 # 🚀 Inicializa o servidor
 # ------------------------------------------------------
 if __name__ == "__main__":
-    # Para rodar localmente:
-    app.run(host="0.0.0.0", port=8080, debug=True)
-    # Se quiser expor em um container, use:
-    # app.run(host="0.0.0.0", port=8080, debug=True)
-
+    init_db()  # garante que o banco existe
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
