@@ -20,7 +20,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             agencia TEXT NOT NULL,
             processo_id TEXT,
-            prioridade TEXT CHECK(prioridade IN ('sim', 'não')),
+            prioridade TEXT CHECK(prioridade IN ('Sim', 'Não')),
             data TEXT
         )
     """)
@@ -37,7 +37,7 @@ def contar_prioridades_semana(agencia):
     inicio_semana = (datetime.now() - timedelta(days=7)).isoformat()
     cursor.execute("""
         SELECT COUNT(*) FROM prioridades
-        WHERE agencia = ? AND prioridade = 'sim' AND data >= ?
+        WHERE agencia = ? AND prioridade = 'Sim' AND data >= ?
     """, (agencia, inicio_semana))
     total = cursor.fetchone()[0]
     conn.close()
@@ -50,7 +50,7 @@ def contar_prioridades_semana(agencia):
 @app.route("/consultar_prioridades/<agencia>", methods=["GET"])
 def consultar_prioridades(agencia):
     total = contar_prioridades_semana(agencia)
-    possui5 = "sim" if total >= 5 else "não"
+    possui5 = "Sim" if total >= 5 else "Não"
     return jsonify({
         "agencia": agencia,
         "total_semana": total,
@@ -71,13 +71,13 @@ def registrar_prioridade():
     prioridade = dados.get("prioridade")
     processo_id = dados.get("processo_id")
 
-    if not agencia or prioridade not in ["sim", "não"]:
-        return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('sim' ou 'não')."}), 400
+    if not agencia or prioridade not in ["Sim", "Não"]:
+        return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('Sim' ou 'Não')."}), 400
 
     total = contar_prioridades_semana(agencia)
 
     # Limita a 5 prioridades por semana
-    if prioridade == "sim" and total >= 5:
+    if prioridade == "Sim" and total >= 5:
         return jsonify({
             "permitido": False,
             "mensagem": f"A agência {agencia} já atingiu 5 prioridades nesta semana.",
@@ -94,10 +94,10 @@ def registrar_prioridade():
     conn.commit()
     conn.close()
 
-    if prioridade == "sim":
+    if prioridade == "Sim":
         total += 1
 
-    possui5 = "sim" if total >= 5 else "não"
+    possui5 = "Sim" if total >= 5 else "Não"
     return jsonify({
         "permitido": True,
         "mensagem": "Prioridade registrada com sucesso.",
@@ -126,3 +126,4 @@ if __name__ == "__main__":
     init_db()  # garante que o banco existe
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
