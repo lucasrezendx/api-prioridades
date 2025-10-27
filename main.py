@@ -107,18 +107,14 @@ def registrar_prioridade():
 def listar_agencias():
     conn = sqlite3.connect(DB)
     cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT agencia FROM prioridades")
+    cursor.execute("SELECT * FROM prioridades")
     agencias = [row[0] for row in cursor.fetchall()]
     conn.close()
 
     resultado = []
     for agencia in agencias:
-        total = contar_prioridades_semana(agencia)
-        possui5 = "sim" if total >= 5 else "não"
         resultado.append({
-            "agencia": agencia,
-            "total_semana": total,
-            "possui5": possui5
+            "id": agencia.id
         })
 
     return jsonify(resultado)
@@ -128,6 +124,6 @@ def listar_agencias():
 # ------------------------------------------------------
 if __name__ == "__main__":
     # Para rodar localmente:
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=8080, debug=True)
     # Se quiser expor em um container, use:
     # app.run(host="0.0.0.0", port=8080, debug=True)
