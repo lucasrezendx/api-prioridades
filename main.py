@@ -34,7 +34,7 @@ def init_db():
 def contar_prioridades_semana(agencia):
     conn = sqlite3.connect(DB)
     cursor = conn.cursor()
-    inicio_semana = (datetime.now() - timedelta(days=0)).isoformat()
+    inicio_semana = (datetime.now() - timedelta(days=7)).isoformat()
     cursor.execute("""
         SELECT COUNT(*) FROM prioridades
         WHERE agencia = ? AND prioridade = 'Sim' AND data >= ?
@@ -126,5 +126,6 @@ if __name__ == "__main__":
     init_db()  # garante que o banco existe
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
 
 
