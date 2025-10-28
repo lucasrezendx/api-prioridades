@@ -20,26 +20,33 @@ DB_CONFIG = {
 
 
 # ------------------------------------------------------
-# 🧱 Conecta ao banco e inicializa a tabela
+# 🧱 Conecta ao banco
 # ------------------------------------------------------
 def get_connection():
     return psycopg2.connect(**DB_CONFIG)
 
 
+# ------------------------------------------------------
+# 🧱 Cria a tabela, se ainda não existir
+# ------------------------------------------------------
 def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS prioridades (
-            id SERIAL PRIMARY KEY,
-            agencia TEXT NOT NULL,
-            processo_id TEXT,
-            prioridade TEXT CHECK(prioridade IN ('Sim', 'Não')),
-            data TIMESTAMP
-        );
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS prioridades (
+                id SERIAL PRIMARY KEY,
+                agencia TEXT NOT NULL,
+                processo_id TEXT,
+                prioridade TEXT CHECK(prioridade IN ('Sim', 'Não')),
+                data TIMESTAMP
+            );
+        """)
+        conn.commit()
+        conn.close()
+        print("✅ Tabela 'prioridades' verificada/criada com sucesso.")
+    except Exception as e:
+        print("❌ Erro ao criar tabela 'prioridades':", e)
 
 
 # ------------------------------------------------------
@@ -89,7 +96,6 @@ def registrar_prioridade():
         return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('Sim' ou 'Não')."}), 400
 
     total = contar_prioridades_semana(agencia)
-
     if prioridade == "Sim" and total >= 5:
         return jsonify({
             "permitido": False,
@@ -108,8 +114,8 @@ def registrar_prioridade():
 
     if prioridade == "Sim":
         total += 1
-
     possui5 = "Sim" if total >= 5 else "Não"
+
     return jsonify({
         "permitido": True,
         "mensagem": "Prioridade registrada com sucesso.",
@@ -132,9 +138,11 @@ def listar_agencias():
 
 
 # ------------------------------------------------------
-# 🚀 Inicializa servidor
+# 🚀 Inicializa app + garante que a tabela exista no Render
 # ------------------------------------------------------
+with app.app_context():
+    init_db()  # <- AGORA é executado mesmo quando o Render usa gunicorn
+
 if __name__ == "__main__":
-    init_db()
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
