@@ -8,22 +8,24 @@ app = Flask(__name__)
 CORS(app)
 
 # ------------------------------------------------------
-# ⚙️ Configuração do banco PostgreSQL (Render)
+# ⚙️ Configuração do banco PostgreSQL (Supabase)
 # ------------------------------------------------------
-DB_CONFIG = {
-    "host": os.environ.get("DB_HOST"),
-    "dbname": os.environ.get("DB_NAME"),
-    "user": os.environ.get("DB_USER"),
-    "password": os.environ.get("DB_PASS"),
-    "port": os.environ.get("DB_PORT", 5432)
-}
+# A variável DATABASE_URL deve estar configurada no Render (ver instruções abaixo)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-
-# ------------------------------------------------------
-# 🧱 Conecta ao banco
-# ------------------------------------------------------
+# Função de conexão (com SSL obrigatório para Supabase)
 def get_connection():
-    return psycopg2.connect(**DB_CONFIG)
+    if not DATABASE_URL:
+        raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
+    # Supabase exige sslmode=require
+    if "sslmode" not in DATABASE_URL:
+        if "?" in DATABASE_URL:
+            conn_str = DATABASE_URL + "&sslmode=require"
+        else:
+            conn_str = DATABASE_URL + "?sslmode=require"
+    else:
+        conn_str = DATABASE_URL
+    return psycopg2.connect(conn_str)
 
 
 # ------------------------------------------------------
@@ -50,7 +52,7 @@ def init_db():
 
 
 # ------------------------------------------------------
-# 📅 Conta quantas prioridades "Sim" uma agência teve nos últimos 7 dias
+# 📅 Conta quantas prioridades 'Sim' uma agência teve nos últimos 7 dias
 # ------------------------------------------------------
 def contar_prioridades_semana(agencia):
     conn = get_connection()
@@ -138,10 +140,10 @@ def listar_agencias():
 
 
 # ------------------------------------------------------
-# 🚀 Inicializa app + garante que a tabela exista no Render
+# 🚀 Inicializa app + garante que a tabela exista no Supabase
 # ------------------------------------------------------
 with app.app_context():
-    init_db()  # <- AGORA é executado mesmo quando o Render usa gunicorn
+    init_db()  # cria a tabela automaticamente se não existir
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
