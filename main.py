@@ -5,13 +5,13 @@ import sqlite3
 import os
 
 app = Flask(__name__)
-CORS(app)  # Permite acesso de outros domínios (ex: React, etc.)
+CORS(app)
 
 DB = "prioridades.db"
 
-# ------------------------------------------------------
-# 🧱 Inicializa o banco de dados
-# ------------------------------------------------------
+# ---------------------------------------
+# Inicializa o banco se não existir
+# ---------------------------------------
 def init_db():
     conn = sqlite3.connect(DB)
     cursor = conn.cursor()
@@ -27,10 +27,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-
-# ------------------------------------------------------
-# 📅 Conta quantas prioridades "sim" uma agência teve nos últimos 7 dias
-# ------------------------------------------------------
+# ---------------------------------------
+# Conta prioridades da semana
+# ---------------------------------------
 def contar_prioridades_semana(agencia):
     conn = sqlite3.connect(DB)
     cursor = conn.cursor()
@@ -43,10 +42,9 @@ def contar_prioridades_semana(agencia):
     conn.close()
     return total
 
-
-# ------------------------------------------------------
-# 🔎 Consulta a quantidade de prioridades por agência
-# ------------------------------------------------------
+# ---------------------------------------
+# Consulta
+# ---------------------------------------
 @app.route("/consultar_prioridades/<agencia>", methods=["GET"])
 def consultar_prioridades(agencia):
     total = contar_prioridades_semana(agencia)
@@ -57,15 +55,14 @@ def consultar_prioridades(agencia):
         "possui5": possui5
     })
 
-
-# ------------------------------------------------------
-# 📝 Registra uma prioridade
-# ------------------------------------------------------
+# ---------------------------------------
+# Registrar
+# ---------------------------------------
 @app.route("/registrar_prioridade", methods=["POST"])
 def registrar_prioridade():
     dados = request.json
     if not dados:
-        return jsonify({"erro": "Requisição inválida: envie um JSON."}), 400
+        return jsonify({"erro": "Envie um JSON válido."}), 400
 
     agencia = dados.get("agencia")
     prioridade = dados.get("prioridade")
@@ -76,7 +73,6 @@ def registrar_prioridade():
 
     total = contar_prioridades_semana(agencia)
 
-    # Limita a 5 prioridades por semana
     if prioridade == "Sim" and total >= 5:
         return jsonify({
             "permitido": False,
@@ -84,7 +80,6 @@ def registrar_prioridade():
             "total_semana": total
         })
 
-    # Insere o registro
     conn = sqlite3.connect(DB)
     cursor = conn.cursor()
     cursor.execute("""
@@ -105,10 +100,9 @@ def registrar_prioridade():
         "possui5": possui5
     })
 
-
-# ------------------------------------------------------
-# 📋 Lista todas as agências registradas
-# ------------------------------------------------------
+# ---------------------------------------
+# Listar agências
+# ---------------------------------------
 @app.route("/listar_agencias", methods=["GET"])
 def listar_agencias():
     conn = sqlite3.connect(DB)
@@ -118,14 +112,10 @@ def listar_agencias():
     conn.close()
     return jsonify(agencias)
 
-
-# ------------------------------------------------------
-# 🚀 Inicializa o servidor
-# ------------------------------------------------------
+# ---------------------------------------
+# Iniciar servidor
+# ---------------------------------------
 if __name__ == "__main__":
-    init_db()  # garante que o banco existe
-    port = int(os.environ.get("PORT", 8080))
+    init_db()
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-
-
