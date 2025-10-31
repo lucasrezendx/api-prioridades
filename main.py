@@ -3,9 +3,6 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import psycopg2
 import os
-import threading
-import time
-import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -22,6 +19,7 @@ def get_connection():
     if "sslmode" not in conn_str:
         conn_str += "&sslmode=require" if "?" in conn_str else "?sslmode=require"
     return psycopg2.connect(conn_str)
+
 
 # ------------------------------------------------------
 # 🏦 Limites por agência (definidos no código)
@@ -52,6 +50,7 @@ LIMITES_AGENCIAS = {
 
 LIMITE_PADRAO = 2
 
+
 # ------------------------------------------------------
 # 🧱 Cria a tabela se não existir
 # ------------------------------------------------------
@@ -74,6 +73,7 @@ def init_db():
     except Exception as e:
         print("❌ Erro ao criar tabela 'prioridades':", e)
 
+
 # ------------------------------------------------------
 # 🧹 Remove registros com mais de 14 dias
 # ------------------------------------------------------
@@ -90,11 +90,13 @@ def limpar_registros_antigos():
     except Exception as e:
         print("❌ Erro ao limpar registros antigos:", e)
 
+
 # ------------------------------------------------------
 # ⚖️ Retorna o limite da agência (ou padrão se não estiver na lista)
 # ------------------------------------------------------
 def get_limite_agencia(agencia):
     return LIMITES_AGENCIAS.get(agencia.upper().strip(), LIMITE_PADRAO)
+
 
 # ------------------------------------------------------
 # 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
@@ -114,6 +116,7 @@ def contar_prioridades_semana(agencia):
     conn.close()
     return total
 
+
 # ------------------------------------------------------
 # 🔎 Consulta prioridades por agência
 # ------------------------------------------------------
@@ -128,6 +131,7 @@ def consultar_prioridades(agencia):
         "limite_semana": limite,
         "atingiu_limite": atingiu_limite
     })
+
 
 # ------------------------------------------------------
 # 📝 Registra prioridade (somente "Sim")
@@ -184,12 +188,14 @@ def registrar_prioridade():
         "atingiu_limite": atingiu_limite
     })
 
+
 # ------------------------------------------------------
 # 📋 Lista todas as agências e seus limites
 # ------------------------------------------------------
 @app.route("/limites", methods=["GET"])
 def listar_limites():
     return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
+
 
 # ------------------------------------------------------
 # 🧽 Rota manual para limpar registros antigos
@@ -199,36 +205,6 @@ def rota_limpar_banco():
     limpar_registros_antigos()
     return jsonify({"mensagem": "Limpeza de registros antigos executada com sucesso."})
 
-# ------------------------------------------------------
-# 📊 Status do sistema
-# ------------------------------------------------------
-@app.route("/status", methods=["GET"])
-def status_sistema():
-    return jsonify({"status": "✅ Sistema em execução"})
-
-# ------------------------------------------------------
-# 🔔 Wake-up interno seguro
-# ------------------------------------------------------
-def wakeup_loop():
-    APP_URL = os.getenv("APP_URL")
-    if not APP_URL:
-        print("❌ Variável APP_URL não definida — wake-up interno não iniciado")
-        return
-    while True:
-        try:
-            requests.get(APP_URL)
-            print(f"✅ Ping em {APP_URL} realizado")
-        except Exception as e:
-            print(f"❌ Erro no wake-up: {e}")
-        time.sleep(600)  # 10 minutos
-
-def start_wakeup():
-    thread = threading.Thread(target=wakeup_loop, daemon=True)
-    thread.start()
-
-@app.before_first_request
-def activate_wakeup():
-    start_wakeup()
 
 # ------------------------------------------------------
 # 🚀 Inicialização automática
