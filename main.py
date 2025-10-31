@@ -26,26 +26,40 @@ def get_connection():
 
 
 # ------------------------------------------------------
-# 🧱 Cria a tabela se não existir
+# 🧱 Dicionário de limites por agência
 # ------------------------------------------------------
-def init_db():
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prioridades (
-                id SERIAL PRIMARY KEY,
-                agencia TEXT NOT NULL,
-                processo_id TEXT,
-                prioridade TEXT CHECK(prioridade IN ('Sim')),
-                data TIMESTAMP
-            );
-        """)
-        conn.commit()
-        conn.close()
-        print("✅ Tabela 'prioridades' verificada/criada com sucesso.")
-    except Exception as e:
-        print("❌ Erro ao criar tabela 'prioridades':", e)
+AGENCIA_LIMITES = {
+    "CRESOL CORONEL VIVIDA": 5,
+    "CRESOL HONORIO SERPA": 3,
+    "CRESOL MANGUEIRINHA": 5,
+    "CRESOL CORONEL DOMINGOS SOARES": 3,
+    "CRESOL PALMAS": 3,
+    "CRESOL CLEVELANDIA": 5,
+    "CRESOL MARIOPOLIS": 3,
+    "CRESOL PATO BRANCO": 5,
+    "CRESOL PATO BRANCO SUL": 5,
+    "CRESOL PATO III": 3,
+    "CRESOL SORRISO": 5,
+    "CRESOL SINOP": 5,
+    "CRESOL LUCAS DO RIO VERDE": 5,
+    "CRESOL VERA": 3,
+    "CRESOL JUARA": 3,
+    "CRESOL TAPURAH": 2,
+    "CRESOL GUARANTA DO NORTE": 3,
+    "CRESOL JUINA": 2,
+    "CRESOL ALTA FLORESTA": 2,
+    "CRESOL COLÍDER": 2,
+    "CRESOL CONECTA": 3
+}
+
+LIMITE_PADRAO = 2
+
+
+def obter_limite_agencia(agencia: str) -> int:
+    """Retorna o limite configurado da agência ou o padrão."""
+    if not agencia:
+        return LIMITE_PADRAO
+    return AGENCIA_LIMITES.get(agencia.upper().strip(), LIMITE_PADRAO)
 
 
 # ------------------------------------------------------
@@ -60,7 +74,7 @@ def limpar_registros_antigos():
         apagados = cursor.rowcount
         conn.commit()
         conn.close()
-        print(f"🧹 {apagados} registros antigos removidos (anteriores a {limite:%d/%m/%Y}).")
+        print(f"🧹 {apagados} registros antigos removidos.")
     except Exception as e:
         print("❌ Erro ao limpar registros antigos:", e)
 
@@ -71,10 +85,8 @@ def limpar_registros_antigos():
 def contar_prioridades_semana(agencia):
     conn = get_connection()
     cursor = conn.cursor()
-
-    # Determina a segunda-feira da semana atual (início da contagem)
     hoje = datetime.now()
-    segunda_atual = hoje - timedelta(days=hoje.weekday())  # weekday(): 0 = segunda
+    segunda_atual = hoje - timedelta(days=hoje.weekday())
     segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
 
     cursor.execute("""
@@ -92,11 +104,13 @@ def contar_prioridades_semana(agencia):
 @app.route("/consultar_prioridades/<agencia>", methods=["GET"])
 def consultar_prioridades(agencia):
     total = contar_prioridades_semana(agencia)
-    possui5 = "Sim" if total >= 5 else "Não"
+    limite = obter_limite_agencia(agencia)
+    possui_limite = "Sim" if total >= limite else "Não"
     return jsonify({
         "agencia": agencia,
         "total_semana": total,
-        "possui5": possui5
+        "limite": limite,
+        "atingiu_limite": possui_limite
     })
 
 
@@ -116,26 +130,25 @@ def registrar_prioridade():
     if not agencia or prioridade not in ["Sim", "Não"]:
         return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('Sim' ou 'Não')."}), 400
 
-    # ❌ Ignora prioridades "Não"
+    limite = obter_limite_agencia(agencia)
+    total = contar_prioridades_semana(agencia)
+
     if prioridade == "Não":
-        total = contar_prioridades_semana(agencia)
         return jsonify({
             "permitido": True,
             "mensagem": "Prioridade marcada como 'Não' — não registrada no banco.",
             "total_semana": total,
-            "possui5": "Sim" if total >= 5 else "Não"
+            "limite": limite
         })
 
-    # ✅ Verifica limite semanal antes de registrar
-    total = contar_prioridades_semana(agencia)
-    if total >= 5:
+    if total >= limite:
         return jsonify({
             "permitido": False,
-            "mensagem": f"A agência {agencia} já atingiu 5 prioridades nesta semana.",
-            "total_semana": total
+            "mensagem": f"A agência {agencia} já atingiu seu limite semanal de {limite} prioridades.",
+            "total_semana": total,
+            "limite": limite
         })
 
-    # Registrar prioridade "Sim"
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -146,13 +159,14 @@ def registrar_prioridade():
     conn.close()
 
     total += 1
-    possui5 = "Sim" if total >= 5 else "Não"
+    atingiu = "Sim" if total >= limite else "Não"
 
     return jsonify({
         "permitido": True,
         "mensagem": "Prioridade 'Sim' registrada com sucesso.",
         "total_semana": total,
-        "possui5": possui5
+        "limite": limite,
+        "atingiu_limite": atingiu
     })
 
 
@@ -170,52 +184,33 @@ def listar_agencias():
 
 
 # ------------------------------------------------------
-# 🧽 Rota manual opcional para limpar registros antigos
-# ------------------------------------------------------
-@app.route("/limpar_banco", methods=["POST"])
-def rota_limpar_banco():
-    limpar_registros_antigos()
-    return jsonify({"mensagem": "Limpeza de registros antigos executada com sucesso."})
-
-
-# ------------------------------------------------------
-# 📊 Nova rota: status do sistema
+# 📊 Status do sistema
 # ------------------------------------------------------
 @app.route("/status", methods=["GET"])
 def status_sistema():
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM prioridades")
+        total_registros = cursor.fetchone()[0]
+        conn.close()
 
-        # Segunda-feira de referência
         hoje = datetime.now()
         segunda_atual = hoje - timedelta(days=hoje.weekday())
         segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
 
-        # Total de registros no banco
-        cursor.execute("SELECT COUNT(*) FROM prioridades")
-        total_registros = cursor.fetchone()[0]
-
-        conn.close()
-
         return jsonify({
             "status": "✅ Sistema em execução",
-            "segunda_referencia": segunda_atual.strftime("%Y-%m-%d"),
             "total_registros": total_registros,
-            "dias_retenção_dados": 14,
-            "mensagem": "As contagens são reiniciadas automaticamente toda segunda-feira."
+            "segunda_referencia": segunda_atual.strftime("%Y-%m-%d"),
+            "dias_retenção": 14
         })
     except Exception as e:
         return jsonify({"status": "❌ Erro ao obter status", "detalhes": str(e)}), 500
 
 
 # ------------------------------------------------------
-# 🚀 Inicialização automática
+# Inicialização opcional (limpeza automática)
 # ------------------------------------------------------
 with app.app_context():
-    init_db()
-    limpar_registros_antigos()  # limpa automaticamente ao iniciar
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    limpar_registros_antigos()
