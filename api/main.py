@@ -3,6 +3,10 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import psycopg2
 import os
+import traceback
+
+# Mensagem rápida para ajudar a identificar execuções no log do Vercel
+print("🚀 Starting api/main.py")
 
 app = Flask(__name__)
 CORS(app)
@@ -12,16 +16,17 @@ CORS(app)
 # ------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+
 def get_connection():
     if not DATABASE_URL:
         raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
-    if "sslmode" not in DATABASE_URL:
-        if "?" in DATABASE_URL:
-            conn_str = DATABASE_URL + "&sslmode=require"
+    # garante sslmode=require caso não venha na string
+    conn_str = DATABASE_URL
+    if "sslmode" not in conn_str:
+        if "?" in conn_str:
+            conn_str = conn_str + "&sslmode=require"
         else:
-            conn_str = DATABASE_URL + "?sslmode=require"
-    else:
-        conn_str = DATABASE_URL
+            conn_str = conn_str + "?sslmode=require"
     return psycopg2.connect(conn_str)
 
 
@@ -57,4 +62,192 @@ LIMITE_PADRAO = 2
 
 def obter_limite_agencia(agencia: str) -> int:
     """Retorna o limite configurado da agência ou o padrão."""
-    if not age
+    if not agencia:
+        return LIMITE_PADRAO
+    return AGENCIA_LIMITES.get(agencia.upper().strip(), LIMITE_PADRAO)
+
+
+# ------------------------------------------------------
+# 🧹 Remove registros com mais de 14 dias
+# ------------------------------------------------------
+def limpar_registros_antigos():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        limite = datetime.now() - timedelta(days=14)
+        cursor.execute("DELETE FROM prioridades WHERE data < %s", (limite,))
+        apagados = cursor.rowcount
+        conn.commit()
+        conn.close()
+        print(f"🧹 {apagados} registros antigos removidos.")
+    except Exception as e:
+        print("❌ Erro ao limpar registros antigos:", e)
+        traceback.print_exc()
+
+
+# ------------------------------------------------------
+# 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
+# ------------------------------------------------------
+def contar_prioridades_semana(agencia):
+    conn = get_connection()
+    cursor = conn.cursor()
+    hoje = datetime.now()
+    segunda_atual = hoje - timedelta(days=hoje.weekday())
+    segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
+
+    cursor.execute("""
+        SELECT COUNT(*) FROM prioridades
+        WHERE agencia = %s AND prioridade = 'Sim' AND data >= %s
+    """, (agencia, segunda_atual))
+    total = cursor.fetchone()[0]
+    conn.close()
+    return total
+
+
+# ------------------------------------------------------
+# Endpoint raiz (opcional) — responde para verificar deploy
+# ------------------------------------------------------
+@app.route("/", methods=["GET"])
+def raiz():
+    return jsonify({"message": "API prioridades está no ar", "ok": True})
+
+
+# ------------------------------------------------------
+# 🔎 Consulta prioridades por agência
+# ------------------------------------------------------
+@app.route("/consultar_prioridades/<agencia>", methods=["GET"])
+def consultar_prioridades(agencia):
+    try:
+        total = contar_prioridades_semana(agencia)
+        limite = obter_limite_agencia(agencia)
+        possui_limite = "Sim" if total >= limite else "Não"
+        return jsonify({
+            "agencia": agencia,
+            "total_semana": total,
+            "limite": limite,
+            "atingiu_limite": possui_limite
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ------------------------------------------------------
+# 📝 Registra prioridade (somente "Sim")
+# ------------------------------------------------------
+@app.route("/registrar_prioridade", methods=["POST"])
+def registrar_prioridade():
+    try:
+        dados = request.json
+        if not dados:
+            return jsonify({"erro": "Requisição inválida: envie um JSON."}), 400
+
+        agencia = dados.get("agencia")
+        prioridade = dados.get("prioridade")
+        processo_id = dados.get("processo_id")
+
+        if not agencia or prioridade not in ["Sim", "Não"]:
+            return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('Sim' ou 'Não')."}), 400
+
+        limite = obter_limite_agencia(agencia)
+        total = contar_prioridades_semana(agencia)
+
+        if prioridade == "Não":
+            return jsonify({
+                "permitido": True,
+                "mensagem": "Prioridade marcada como 'Não' — não registrada no banco.",
+                "total_semana": total,
+                "limite": limite
+            })
+
+        if total >= limite:
+            return jsonify({
+                "permitido": False,
+                "mensagem": f"A agência {agencia} já atingiu seu limite semanal de {limite} prioridades.",
+                "total_semana": total,
+                "limite": limite
+            })
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO prioridades (agencia, processo_id, prioridade, data)
+            VALUES (%s, %s, %s, %s)
+        """, (agencia, processo_id, "Sim", datetime.now()))
+        conn.commit()
+        conn.close()
+
+        total += 1
+        atingiu = "Sim" if total >= limite else "Não"
+
+        return jsonify({
+            "permitido": True,
+            "mensagem": "Prioridade 'Sim' registrada com sucesso.",
+            "total_semana": total,
+            "limite": limite,
+            "atingiu_limite": atingiu
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ------------------------------------------------------
+# 📋 Lista todas as agências registradas
+# ------------------------------------------------------
+@app.route("/listar_agencias", methods=["GET"])
+def listar_agencias():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT agencia FROM prioridades")
+        agencias = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return jsonify(agencias)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ------------------------------------------------------
+# 📊 Status do sistema
+# ------------------------------------------------------
+@app.route("/status", methods=["GET"])
+def status_sistema():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM prioridades")
+        total_registros = cursor.fetchone()[0]
+        conn.close()
+
+        hoje = datetime.now()
+        segunda_atual = hoje - timedelta(days=hoje.weekday())
+        segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
+
+        return jsonify({
+            "status": "✅ Sistema em execução",
+            "total_registros": total_registros,
+            "segunda_referencia": segunda_atual.strftime("%Y-%m-%d"),
+            "dias_retenção": 14
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "❌ Erro ao obter status", "detalhes": str(e)}), 500
+
+
+# ------------------------------------------------------
+# Inicialização opcional (limpeza automática)
+# ------------------------------------------------------
+with app.app_context():
+    try:
+        limpar_registros_antigos()
+    except Exception:
+        # apenas loga; não interrompe startup
+        traceback.print_exc()
+
+
+# ------------------------------------------------------
+# 🔚 Handler para o Vercel reconhecer o app Flask
+# ------------------------------------------------------
+handler = app
