@@ -15,14 +15,40 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 def get_connection():
     if not DATABASE_URL:
         raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
-    if "sslmode" not in DATABASE_URL:
-        if "?" in DATABASE_URL:
-            conn_str = DATABASE_URL + "&sslmode=require"
-        else:
-            conn_str = DATABASE_URL + "?sslmode=require"
-    else:
-        conn_str = DATABASE_URL
+    conn_str = DATABASE_URL
+    if "sslmode" not in conn_str:
+        conn_str += "&sslmode=require" if "?" in conn_str else "?sslmode=require"
     return psycopg2.connect(conn_str)
+
+
+# ------------------------------------------------------
+# 🏦 Limites por agência (definidos no código)
+# ------------------------------------------------------
+LIMITES_AGENCIAS = {
+    "CRESOL CORONEL VIVIDA": 5,
+    "CRESOL HONORIO SERPA": 3,
+    "CRESOL MANGUEIRINHA": 5,
+    "CRESOL CORONEL DOMINGOS SOARES": 3,
+    "CRESOL PALMAS": 3,
+    "CRESOL CLEVELANDIA": 5,
+    "CRESOL MARIOPOLIS": 3,
+    "CRESOL PATO BRANCO": 5,
+    "CRESOL PATO BRANCO SUL": 5,
+    "CRESOL PATO III": 3,
+    "CRESOL SORRISO": 5,
+    "CRESOL SINOP": 5,
+    "CRESOL LUCAS DO RIO VERDE": 5,
+    "CRESOL VERA": 3,
+    "CRESOL JUARA": 3,
+    "CRESOL TAPURAH": 2,
+    "CRESOL GUARANTA DO NORTE": 3,
+    "CRESOL JUINA": 2,
+    "CRESOL ALTA FLORESTA": 2,
+    "CRESOL COLÍDER": 2,
+    "CRESOL CONECTA": 3
+}
+
+LIMITE_PADRAO = 2
 
 
 # ------------------------------------------------------
@@ -66,20 +92,25 @@ def limpar_registros_antigos():
 
 
 # ------------------------------------------------------
+# ⚖️ Retorna o limite da agência (ou padrão se não estiver na lista)
+# ------------------------------------------------------
+def get_limite_agencia(agencia):
+    return LIMITES_AGENCIAS.get(agencia.upper().strip(), LIMITE_PADRAO)
+
+
+# ------------------------------------------------------
 # 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
 # ------------------------------------------------------
 def contar_prioridades_semana(agencia):
     conn = get_connection()
     cursor = conn.cursor()
-
-    # Determina a segunda-feira da semana atual (início da contagem)
     hoje = datetime.now()
-    segunda_atual = hoje - timedelta(days=hoje.weekday())  # weekday(): 0 = segunda
+    segunda_atual = hoje - timedelta(days=hoje.weekday())
     segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
 
     cursor.execute("""
         SELECT COUNT(*) FROM prioridades
-        WHERE agencia = %s AND prioridade = 'Sim' AND data >= %s
+        WHERE UPPER(agencia) = UPPER(%s) AND prioridade = 'Sim' AND data >= %s
     """, (agencia, segunda_atual))
     total = cursor.fetchone()[0]
     conn.close()
@@ -92,11 +123,13 @@ def contar_prioridades_semana(agencia):
 @app.route("/consultar_prioridades/<agencia>", methods=["GET"])
 def consultar_prioridades(agencia):
     total = contar_prioridades_semana(agencia)
-    possui5 = "Sim" if total >= 5 else "Não"
+    limite = get_limite_agencia(agencia)
+    atingiu_limite = "Sim" if total >= limite else "Não"
     return jsonify({
         "agencia": agencia,
         "total_semana": total,
-        "possui5": possui5
+        "limite_semana": limite,
+        "atingiu_limite": atingiu_limite
     })
 
 
@@ -116,26 +149,25 @@ def registrar_prioridade():
     if not agencia or prioridade not in ["Sim", "Não"]:
         return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('Sim' ou 'Não')."}), 400
 
-    # ❌ Ignora prioridades "Não"
+    total = contar_prioridades_semana(agencia)
+    limite = get_limite_agencia(agencia)
+
     if prioridade == "Não":
-        total = contar_prioridades_semana(agencia)
         return jsonify({
             "permitido": True,
             "mensagem": "Prioridade marcada como 'Não' — não registrada no banco.",
             "total_semana": total,
-            "possui5": "Sim" if total >= 5 else "Não"
+            "limite_semana": limite
         })
 
-    # ✅ Verifica limite semanal antes de registrar
-    total = contar_prioridades_semana(agencia)
-    if total >= 5:
+    if total >= limite:
         return jsonify({
             "permitido": False,
-            "mensagem": f"A agência {agencia} já atingiu 5 prioridades nesta semana.",
-            "total_semana": total
+            "mensagem": f"A agência {agencia} já atingiu seu limite semanal ({limite}).",
+            "total_semana": total,
+            "limite_semana": limite
         })
 
-    # Registrar prioridade "Sim"
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -146,31 +178,27 @@ def registrar_prioridade():
     conn.close()
 
     total += 1
-    possui5 = "Sim" if total >= 5 else "Não"
+    atingiu_limite = "Sim" if total >= limite else "Não"
 
     return jsonify({
         "permitido": True,
         "mensagem": "Prioridade 'Sim' registrada com sucesso.",
         "total_semana": total,
-        "possui5": possui5
+        "limite_semana": limite,
+        "atingiu_limite": atingiu_limite
     })
 
 
 # ------------------------------------------------------
-# 📋 Lista todas as agências registradas
+# 📋 Lista todas as agências e seus limites
 # ------------------------------------------------------
-@app.route("/listar_agencias", methods=["GET"])
-def listar_agencias():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT agencia FROM prioridades")
-    agencias = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(agencias)
+@app.route("/limites", methods=["GET"])
+def listar_limites():
+    return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
 
 
 # ------------------------------------------------------
-# 🧽 Rota manual opcional para limpar registros antigos
+# 🧽 Rota manual para limpar registros antigos
 # ------------------------------------------------------
 @app.route("/limpar_banco", methods=["POST"])
 def rota_limpar_banco():
@@ -179,42 +207,11 @@ def rota_limpar_banco():
 
 
 # ------------------------------------------------------
-# 📊 Nova rota: status do sistema
-# ------------------------------------------------------
-@app.route("/status", methods=["GET"])
-def status_sistema():
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        # Segunda-feira de referência
-        hoje = datetime.now()
-        segunda_atual = hoje - timedelta(days=hoje.weekday())
-        segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
-
-        # Total de registros no banco
-        cursor.execute("SELECT COUNT(*) FROM prioridades")
-        total_registros = cursor.fetchone()[0]
-
-        conn.close()
-
-        return jsonify({
-            "status": "✅ Sistema em execução",
-            "segunda_referencia": segunda_atual.strftime("%Y-%m-%d"),
-            "total_registros": total_registros,
-            "dias_retenção_dados": 14,
-            "mensagem": "As contagens são reiniciadas automaticamente toda segunda-feira."
-        })
-    except Exception as e:
-        return jsonify({"status": "❌ Erro ao obter status", "detalhes": str(e)}), 500
-
-
-# ------------------------------------------------------
 # 🚀 Inicialização automática
 # ------------------------------------------------------
 with app.app_context():
     init_db()
-    limpar_registros_antigos()  # limpa automaticamente ao iniciar
+    limpar_registros_antigos()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
