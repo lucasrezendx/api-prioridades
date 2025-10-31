@@ -8,21 +8,22 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# Configuração do banco PostgreSQL (Supabase)
+# ========================
+# 🔧 Configuração do Banco
+# ========================
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_connection():
     if not DATABASE_URL:
-        raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
+        raise ValueError("❌ Variável DATABASE_URL não configurada.")
     conn_str = DATABASE_URL
     if "sslmode" not in conn_str:
-        if "?" in conn_str:
-            conn_str += "&sslmode=require"
-        else:
-            conn_str += "?sslmode=require"
+        conn_str += "?sslmode=require"
     return psycopg2.connect(conn_str)
 
-# Dicionário de limites por agência
+# ===========================
+# 📋 Limites por agência
+# ===========================
 AGENCIA_LIMITES = {
     "CRESOL CORONEL VIVIDA": 5,
     "CRESOL HONORIO SERPA": 3,
@@ -54,8 +55,11 @@ def obter_limite_agencia(agencia: str) -> int:
         return LIMITE_PADRAO
     return AGENCIA_LIMITES.get(agencia.upper().strip(), LIMITE_PADRAO)
 
-# Limpa registros antigos (mais de 14 dias)
+# ===========================
+# 🧹 Limpeza e contagem
+# ===========================
 def limpar_registros_antigos():
+    """Remove registros com mais de 14 dias"""
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -69,8 +73,8 @@ def limpar_registros_antigos():
         print("❌ Erro ao limpar registros antigos:", e)
         traceback.print_exc()
 
-# Conta prioridades da semana
 def contar_prioridades_semana(agencia):
+    """Conta quantas prioridades 'Sim' foram feitas nesta semana"""
     conn = get_connection()
     cursor = conn.cursor()
     hoje = datetime.now()
@@ -84,9 +88,12 @@ def contar_prioridades_semana(agencia):
     conn.close()
     return total
 
+# ===========================
+# 🌐 Rotas da API
+# ===========================
 @app.route("/")
 def home():
-    return jsonify({"mensagem": "API de Prioridades ativa!"})
+    return jsonify({"mensagem": "✅ API de Prioridades ativa e rodando no Vercel!"})
 
 @app.route("/consultar_prioridades/<agencia>")
 def consultar_prioridades(agencia):
@@ -168,8 +175,9 @@ def status():
         traceback.print_exc()
         return jsonify({"status": "erro", "detalhes": str(e)}), 500
 
+# 🔁 Executa limpeza na inicialização
 with app.app_context():
     limpar_registros_antigos()
 
-# Necessário para o Vercel reconhecer o app Flask
+# ⚡ Vercel handler
 handler = app
