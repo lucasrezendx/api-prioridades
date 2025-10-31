@@ -49,6 +49,7 @@ LIMITES_AGENCIAS = {
     "CRESOL COLÍDER": 2,
     "CRESOL CONECTA": 3
 }
+
 LIMITE_PADRAO = 2
 
 # ------------------------------------------------------
@@ -199,23 +200,35 @@ def rota_limpar_banco():
     return jsonify({"mensagem": "Limpeza de registros antigos executada com sucesso."})
 
 # ------------------------------------------------------
-# 🕒 Função de wake-up (mantém o app acordado)
+# 📊 Status do sistema
 # ------------------------------------------------------
-def wake_up():
-    URL = os.environ.get("APP_URL") or "http://localhost:8080/status"
-    while True:
-        agora = datetime.now()
-        # Executa apenas de segunda (0) a sexta (4), entre 07:00 e 18:00
-        if agora.weekday() <= 4 and 7 <= agora.hour < 18:
-            try:
-                requests.get(URL, timeout=5)
-                print(f"✅ Wake-up feito em {agora.strftime('%Y-%m-%d %H:%M:%S')}")
-            except Exception as e:
-                print(f"❌ Erro no wake-up: {e}")
-        time.sleep(600)  # 600 segundos = 10 minutos
+@app.route("/status", methods=["GET"])
+def status_sistema():
+    return jsonify({"status": "✅ Sistema em execução"})
 
-# Inicializa a thread de wake-up em background
-threading.Thread(target=wake_up, daemon=True).start()
+# ------------------------------------------------------
+# 🔔 Wake-up interno seguro
+# ------------------------------------------------------
+def wakeup_loop():
+    APP_URL = os.getenv("APP_URL")
+    if not APP_URL:
+        print("❌ Variável APP_URL não definida — wake-up interno não iniciado")
+        return
+    while True:
+        try:
+            requests.get(APP_URL)
+            print(f"✅ Ping em {APP_URL} realizado")
+        except Exception as e:
+            print(f"❌ Erro no wake-up: {e}")
+        time.sleep(600)  # 10 minutos
+
+def start_wakeup():
+    thread = threading.Thread(target=wakeup_loop, daemon=True)
+    thread.start()
+
+@app.before_first_request
+def activate_wakeup():
+    start_wakeup()
 
 # ------------------------------------------------------
 # 🚀 Inicialização automática
