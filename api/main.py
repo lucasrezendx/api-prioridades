@@ -219,6 +219,6 @@ with app.app_context():
 # ------------------------------------------------------
 # 🔚 Handler para o Vercel reconhecer o app Flask
 # ------------------------------------------------------
-# Essa linha é essencial para que o Vercel identifique o app
-app = app
+# Vercel entrypoint
+handler = app
 
