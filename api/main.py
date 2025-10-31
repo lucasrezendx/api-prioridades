@@ -214,3 +214,11 @@ def status_sistema():
 # ------------------------------------------------------
 with app.app_context():
     limpar_registros_antigos()
+
+
+# ------------------------------------------------------
+# 🔚 Handler para o Vercel reconhecer o app Flask
+# ------------------------------------------------------
+# Essa linha é essencial para que o Vercel identifique o app
+app = app
+
