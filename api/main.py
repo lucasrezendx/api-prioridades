@@ -5,34 +5,24 @@ import psycopg2
 import os
 import traceback
 
-# Mensagem rápida para ajudar a identificar execuções no log do Vercel
-print("🚀 Starting api/main.py")
-
 app = Flask(__name__)
 CORS(app)
 
-# ------------------------------------------------------
-# ⚙️ Configuração do banco PostgreSQL (Supabase)
-# ------------------------------------------------------
+# Configuração do banco PostgreSQL (Supabase)
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 
 def get_connection():
     if not DATABASE_URL:
         raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
-    # garante sslmode=require caso não venha na string
     conn_str = DATABASE_URL
     if "sslmode" not in conn_str:
         if "?" in conn_str:
-            conn_str = conn_str + "&sslmode=require"
+            conn_str += "&sslmode=require"
         else:
-            conn_str = conn_str + "?sslmode=require"
+            conn_str += "?sslmode=require"
     return psycopg2.connect(conn_str)
 
-
-# ------------------------------------------------------
-# 🧱 Dicionário de limites por agência
-# ------------------------------------------------------
+# Dicionário de limites por agência
 AGENCIA_LIMITES = {
     "CRESOL CORONEL VIVIDA": 5,
     "CRESOL HONORIO SERPA": 3,
@@ -59,17 +49,12 @@ AGENCIA_LIMITES = {
 
 LIMITE_PADRAO = 2
 
-
 def obter_limite_agencia(agencia: str) -> int:
-    """Retorna o limite configurado da agência ou o padrão."""
     if not agencia:
         return LIMITE_PADRAO
     return AGENCIA_LIMITES.get(agencia.upper().strip(), LIMITE_PADRAO)
 
-
-# ------------------------------------------------------
-# 🧹 Remove registros com mais de 14 dias
-# ------------------------------------------------------
+# Limpa registros antigos (mais de 14 dias)
 def limpar_registros_antigos():
     try:
         conn = get_connection()
@@ -84,63 +69,47 @@ def limpar_registros_antigos():
         print("❌ Erro ao limpar registros antigos:", e)
         traceback.print_exc()
 
-
-# ------------------------------------------------------
-# 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
-# ------------------------------------------------------
+# Conta prioridades da semana
 def contar_prioridades_semana(agencia):
     conn = get_connection()
     cursor = conn.cursor()
     hoje = datetime.now()
-    segunda_atual = hoje - timedelta(days=hoje.weekday())
-    segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
-
+    segunda = hoje - timedelta(days=hoje.weekday())
+    segunda = datetime(segunda.year, segunda.month, segunda.day)
     cursor.execute("""
         SELECT COUNT(*) FROM prioridades
         WHERE agencia = %s AND prioridade = 'Sim' AND data >= %s
-    """, (agencia, segunda_atual))
+    """, (agencia, segunda))
     total = cursor.fetchone()[0]
     conn.close()
     return total
 
+@app.route("/")
+def home():
+    return jsonify({"mensagem": "API de Prioridades ativa!"})
 
-# ------------------------------------------------------
-# Endpoint raiz (opcional) — responde para verificar deploy
-# ------------------------------------------------------
-@app.route("/", methods=["GET"])
-def raiz():
-    return jsonify({"message": "API prioridades está no ar", "ok": True})
-
-
-# ------------------------------------------------------
-# 🔎 Consulta prioridades por agência
-# ------------------------------------------------------
-@app.route("/consultar_prioridades/<agencia>", methods=["GET"])
+@app.route("/consultar_prioridades/<agencia>")
 def consultar_prioridades(agencia):
     try:
         total = contar_prioridades_semana(agencia)
         limite = obter_limite_agencia(agencia)
-        possui_limite = "Sim" if total >= limite else "Não"
+        atingiu = total >= limite
         return jsonify({
             "agencia": agencia,
             "total_semana": total,
             "limite": limite,
-            "atingiu_limite": possui_limite
+            "atingiu_limite": atingiu
         })
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"erro": str(e)}), 500
 
-
-# ------------------------------------------------------
-# 📝 Registra prioridade (somente "Sim")
-# ------------------------------------------------------
 @app.route("/registrar_prioridade", methods=["POST"])
 def registrar_prioridade():
     try:
         dados = request.json
         if not dados:
-            return jsonify({"erro": "Requisição inválida: envie um JSON."}), 400
+            return jsonify({"erro": "JSON inválido."}), 400
 
         agencia = dados.get("agencia")
         prioridade = dados.get("prioridade")
@@ -155,7 +124,7 @@ def registrar_prioridade():
         if prioridade == "Não":
             return jsonify({
                 "permitido": True,
-                "mensagem": "Prioridade marcada como 'Não' — não registrada no banco.",
+                "mensagem": "Prioridade 'Não' não é registrada.",
                 "total_semana": total,
                 "limite": limite
             })
@@ -163,9 +132,8 @@ def registrar_prioridade():
         if total >= limite:
             return jsonify({
                 "permitido": False,
-                "mensagem": f"A agência {agencia} já atingiu seu limite semanal de {limite} prioridades.",
-                "total_semana": total,
-                "limite": limite
+                "mensagem": f"Limite de {limite} prioridades atingido para {agencia}.",
+                "total_semana": total
             })
 
         conn = get_connection()
@@ -177,77 +145,31 @@ def registrar_prioridade():
         conn.commit()
         conn.close()
 
-        total += 1
-        atingiu = "Sim" if total >= limite else "Não"
-
         return jsonify({
             "permitido": True,
-            "mensagem": "Prioridade 'Sim' registrada com sucesso.",
-            "total_semana": total,
-            "limite": limite,
-            "atingiu_limite": atingiu
+            "mensagem": "Prioridade registrada com sucesso.",
+            "total_semana": total + 1,
+            "limite": limite
         })
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"erro": str(e)}), 500
 
-
-# ------------------------------------------------------
-# 📋 Lista todas as agências registradas
-# ------------------------------------------------------
-@app.route("/listar_agencias", methods=["GET"])
-def listar_agencias():
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT agencia FROM prioridades")
-        agencias = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return jsonify(agencias)
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
-# ------------------------------------------------------
-# 📊 Status do sistema
-# ------------------------------------------------------
-@app.route("/status", methods=["GET"])
-def status_sistema():
+@app.route("/status")
+def status():
     try:
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM prioridades")
-        total_registros = cursor.fetchone()[0]
+        total = cursor.fetchone()[0]
         conn.close()
-
-        hoje = datetime.now()
-        segunda_atual = hoje - timedelta(days=hoje.weekday())
-        segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
-
-        return jsonify({
-            "status": "✅ Sistema em execução",
-            "total_registros": total_registros,
-            "segunda_referencia": segunda_atual.strftime("%Y-%m-%d"),
-            "dias_retenção": 14
-        })
+        return jsonify({"status": "ok", "total_registros": total})
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"status": "❌ Erro ao obter status", "detalhes": str(e)}), 500
+        return jsonify({"status": "erro", "detalhes": str(e)}), 500
 
-
-# ------------------------------------------------------
-# Inicialização opcional (limpeza automática)
-# ------------------------------------------------------
 with app.app_context():
-    try:
-        limpar_registros_antigos()
-    except Exception:
-        # apenas loga; não interrompe startup
-        traceback.print_exc()
+    limpar_registros_antigos()
 
-
-# ------------------------------------------------------
-# 🔚 Handler para o Vercel reconhecer o app Flask
-# ------------------------------------------------------
+# Necessário para o Vercel reconhecer o app Flask
 handler = app
