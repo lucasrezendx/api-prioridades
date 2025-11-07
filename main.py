@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import psycopg2
 import os
 
-app = Flask(_name_)
+app = Flask(__name__)
 CORS(app)
 
 # ------------------------------------------------------
@@ -194,7 +194,7 @@ def registrar_prioridade():
 # ------------------------------------------------------
 @app.route("/limites", methods=["GET"])
 def listar_limites():
-    return jsonify({**LIMITES_AGENCIAS, "PADRAO": LIMITE_PADRAO})
+    return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
 
 
 # ------------------------------------------------------
@@ -213,6 +213,6 @@ with app.app_context():
     init_db()
     limpar_registros_antigos()
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
