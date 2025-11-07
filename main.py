@@ -3,6 +3,7 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import psycopg2
 import os
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -12,13 +13,32 @@ CORS(app)
 # ------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-def get_connection():
+
+def get_connection(retries=3, delay=2):
+    """
+    Cria uma conexão nova com o Supabase.
+    - Faz até `retries` tentativas se falhar (ex: após o Render dormir).
+    - Garante SSL obrigatório.
+    """
     if not DATABASE_URL:
         raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
+
     conn_str = DATABASE_URL
     if "sslmode" not in conn_str:
         conn_str += "&sslmode=require" if "?" in conn_str else "?sslmode=require"
-    return psycopg2.connect(conn_str)
+
+    for tentativa in range(retries):
+        try:
+            conn = psycopg2.connect(conn_str)
+            conn.autocommit = False
+            return conn
+        except psycopg2.OperationalError as e:
+            print(f"⚠️ Erro ao conectar ao banco (tentativa {tentativa + 1}/{retries}): {e}")
+            if tentativa < retries - 1:
+                time.sleep(delay)
+            else:
+                print("❌ Falha ao conectar ao Supabase após várias tentativas.")
+                raise
 
 
 # ------------------------------------------------------
@@ -68,16 +88,19 @@ def init_db():
             );
         """)
         conn.commit()
-        conn.close()
         print("✅ Tabela 'prioridades' verificada/criada com sucesso.")
     except Exception as e:
         print("❌ Erro ao criar tabela 'prioridades':", e)
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 
 # ------------------------------------------------------
 # 🧹 Remove registros com mais de 14 dias
 # ------------------------------------------------------
 def limpar_registros_antigos():
+    conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -85,10 +108,12 @@ def limpar_registros_antigos():
         cursor.execute("DELETE FROM prioridades WHERE data < %s", (limite,))
         apagados = cursor.rowcount
         conn.commit()
-        conn.close()
         print(f"🧹 {apagados} registros antigos removidos (anteriores a {limite:%d/%m/%Y}).")
     except Exception as e:
         print("❌ Erro ao limpar registros antigos:", e)
+    finally:
+        if conn:
+            conn.close()
 
 
 # ------------------------------------------------------
@@ -102,19 +127,23 @@ def get_limite_agencia(agencia):
 # 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
 # ------------------------------------------------------
 def contar_prioridades_semana(agencia):
-    conn = get_connection()
-    cursor = conn.cursor()
-    hoje = datetime.now()
-    segunda_atual = hoje - timedelta(days=hoje.weekday())
-    segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        hoje = datetime.now()
+        segunda_atual = hoje - timedelta(days=hoje.weekday())
+        segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
 
-    cursor.execute("""
-        SELECT COUNT(*) FROM prioridades
-        WHERE UPPER(agencia) = UPPER(%s) AND prioridade = 'Sim' AND data >= %s
-    """, (agencia, segunda_atual))
-    total = cursor.fetchone()[0]
-    conn.close()
-    return total
+        cursor.execute("""
+            SELECT COUNT(*) FROM prioridades
+            WHERE UPPER(agencia) = UPPER(%s) AND prioridade = 'Sim' AND data >= %s
+        """, (agencia, segunda_atual))
+        total = cursor.fetchone()[0]
+        return total
+    finally:
+        if conn:
+            conn.close()
 
 
 # ------------------------------------------------------
@@ -168,14 +197,18 @@ def registrar_prioridade():
             "limite_semana": limite
         })
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO prioridades (agencia, processo_id, prioridade, data)
-        VALUES (%s, %s, %s, %s)
-    """, (agencia, processo_id, "Sim", datetime.now()))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO prioridades (agencia, processo_id, prioridade, data)
+            VALUES (%s, %s, %s, %s)
+        """, (agencia, processo_id, "Sim", datetime.now()))
+        conn.commit()
+    finally:
+        if conn:
+            conn.close()
 
     total += 1
     atingiu_limite = "Sim" if total >= limite else "Não"
