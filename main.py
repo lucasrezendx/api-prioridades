@@ -6,7 +6,7 @@ import os
 import socket
 
 # 🔧 Força IPv4 no Render (evita erro de "network unreachable")
-socket.setdefaultfamily(socket.AF_INET)
+socket.set_default_family(socket.AF_INET)
 
 app = Flask(__name__)
 CORS(app)
