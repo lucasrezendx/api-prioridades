@@ -1,218 +1,196 @@
-from flask import Flask, request, jsonify
+import os
+import psycopg2
+from psycopg2 import pool
+from flask import Flask, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta
-import psycopg2
-import os
+import time
 
+# ==============================
+# 🔧 CONFIGURAÇÃO DO APP
+# ==============================
 app = Flask(__name__)
 CORS(app)
 
-# ------------------------------------------------------
-# ⚙️ Configuração do banco PostgreSQL (Supabase)
-# ------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")
+# ==============================
+# 🗄️ CONFIGURAÇÃO DO BANCO (SUPABASE)
+# ==============================
+DB_URL = "postgres://postgres.cvjwrmmjinaxdquowboq:32323815Soares@aws-1-us-east-2.pooler.supabase.com:5432/postgres"
+
+connection_pool = None
+
+
+def init_connection_pool():
+    """Inicializa o pool de conexões."""
+    global connection_pool
+    if connection_pool is None:
+        try:
+            connection_pool = psycopg2.pool.SimpleConnectionPool(
+                1, 10, DB_URL, connect_timeout=5
+            )
+            print("✅ Pool de conexões inicializado com sucesso.")
+        except Exception as e:
+            print("❌ Erro ao inicializar pool:", e)
+
 
 def get_connection():
-    if not DATABASE_URL:
-        raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
-    conn_str = DATABASE_URL
-    if "sslmode" not in conn_str:
-        conn_str += "&sslmode=require" if "?" in conn_str else "?sslmode=require"
-    return psycopg2.connect(conn_str)
+    """Obtém uma conexão do pool, com retry automático."""
+    global connection_pool
+    if connection_pool is None:
+        init_connection_pool()
+
+    for attempt in range(3):
+        try:
+            conn = connection_pool.getconn()
+            return conn
+        except Exception as e:
+            print(f"⚠️ Erro ao pegar conexão (tentativa {attempt + 1}): {e}")
+            time.sleep(1)
+            if attempt == 2:
+                # Recria o pool se falhar 3 vezes
+                print("♻️ Recriando pool de conexões...")
+                init_connection_pool()
+    raise Exception("Falha ao conectar ao banco após várias tentativas")
 
 
-# ------------------------------------------------------
-# 🏦 Limites por agência (definidos no código)
-# ------------------------------------------------------
-LIMITES_AGENCIAS = {
-    "CRESOL CORONEL VIVIDA": 5,
-    "CRESOL HONORIO SERPA": 3,
-    "CRESOL MANGUEIRINHA": 5,
-    "CRESOL CORONEL DOMINGOS SOARES": 3,
-    "CRESOL PALMAS": 3,
-    "CRESOL CLEVELANDIA": 5,
-    "CRESOL MARIOPOLIS": 3,
-    "CRESOL PATO BRANCO": 5,
-    "CRESOL PATO BRANCO SUL": 5,
-    "CRESOL PATO III": 3,
-    "CRESOL SORRISO": 5,
-    "CRESOL SINOP": 5,
-    "CRESOL LUCAS DO RIO VERDE": 5,
-    "CRESOL VERA": 3,
-    "CRESOL JUARA": 3,
-    "CRESOL TAPURAH": 2,
-    "CRESOL GUARANTA DO NORTE": 3,
-    "CRESOL JUINA": 2,
-    "CRESOL ALTA FLORESTA": 2,
-    "CRESOL COLÍDER": 2,
-    "CRESOL CONECTA": 3
-}
-
-LIMITE_PADRAO = 2
+def release_connection(conn):
+    """Libera uma conexão de volta ao pool."""
+    global connection_pool
+    if connection_pool and conn:
+        try:
+            connection_pool.putconn(conn)
+        except Exception as e:
+            print("⚠️ Erro ao liberar conexão:", e)
 
 
-# ------------------------------------------------------
-# 🧱 Cria a tabela se não existir
-# ------------------------------------------------------
-def init_db():
+# ==============================
+# 🧹 MANUTENÇÃO AUTOMÁTICA
+# ==============================
+def limpar_registros_antigos():
+    """Remove registros com mais de 14 dias."""
+    conn = get_connection()
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
+        cur = conn.cursor()
+        limite = datetime.now() - timedelta(days=14)
+        cur.execute("DELETE FROM prioridades WHERE data_criacao < %s", (limite,))
+        removidos = cur.rowcount
+        conn.commit()
+        print(f"🧹 {removidos} registros antigos removidos (anteriores a {limite.date()}).")
+    except Exception as e:
+        print("⚠️ Erro ao limpar registros antigos:", e)
+    finally:
+        release_connection(conn)
+
+
+# ==============================
+# 🏗️ INICIALIZAÇÃO DA TABELA
+# ==============================
+def criar_tabela_prioridades():
+    """Cria a tabela se não existir."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS prioridades (
                 id SERIAL PRIMARY KEY,
-                agencia TEXT NOT NULL,
-                processo_id TEXT,
-                prioridade TEXT CHECK(prioridade IN ('Sim')),
-                data TIMESTAMP
+                agencia VARCHAR(255),
+                prioridade VARCHAR(255),
+                data_criacao TIMESTAMP DEFAULT NOW()
             );
         """)
         conn.commit()
-        conn.close()
         print("✅ Tabela 'prioridades' verificada/criada com sucesso.")
     except Exception as e:
-        print("❌ Erro ao criar tabela 'prioridades':", e)
+        print("❌ Erro ao criar tabela:", e)
+    finally:
+        release_connection(conn)
 
 
-# ------------------------------------------------------
-# 🧹 Remove registros com mais de 14 dias
-# ------------------------------------------------------
-def limpar_registros_antigos():
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        limite = datetime.now() - timedelta(days=14)
-        cursor.execute("DELETE FROM prioridades WHERE data < %s", (limite,))
-        apagados = cursor.rowcount
-        conn.commit()
-        conn.close()
-        print(f"🧹 {apagados} registros antigos removidos (anteriores a {limite:%d/%m/%Y}).")
-    except Exception as e:
-        print("❌ Erro ao limpar registros antigos:", e)
-
-
-# ------------------------------------------------------
-# ⚖️ Retorna o limite da agência (ou padrão se não estiver na lista)
-# ------------------------------------------------------
-def get_limite_agencia(agencia):
-    return LIMITES_AGENCIAS.get(agencia.upper().strip(), LIMITE_PADRAO)
-
-
-# ------------------------------------------------------
-# 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
-# ------------------------------------------------------
+# ==============================
+# 📊 FUNÇÕES DE CONSULTA
+# ==============================
 def contar_prioridades_semana(agencia):
+    """Conta registros da semana atual por agência."""
     conn = get_connection()
-    cursor = conn.cursor()
-    hoje = datetime.now()
-    segunda_atual = hoje - timedelta(days=hoje.weekday())
-    segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
+    try:
+        cur = conn.cursor()
+        inicio_semana = datetime.now() - timedelta(days=datetime.now().weekday())
+        cur.execute("""
+            SELECT COUNT(*) FROM prioridades
+            WHERE agencia = %s AND data_criacao >= %s;
+        """, (agencia, inicio_semana))
+        total = cur.fetchone()[0]
+        return total
+    except Exception as e:
+        print("⚠️ Erro ao contar prioridades:", e)
+        return 0
+    finally:
+        release_connection(conn)
 
-    cursor.execute("""
-        SELECT COUNT(*) FROM prioridades
-        WHERE UPPER(agencia) = UPPER(%s) AND prioridade = 'Sim' AND data >= %s
-    """, (agencia, segunda_atual))
-    total = cursor.fetchone()[0]
-    conn.close()
-    return total
+
+def listar_prioridades(agencia):
+    """Lista todas as prioridades de uma agência."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, prioridade, data_criacao
+            FROM prioridades
+            WHERE agencia = %s
+            ORDER BY data_criacao DESC;
+        """, (agencia,))
+        rows = cur.fetchall()
+        return [
+            {"id": r[0], "prioridade": r[1], "data_criacao": r[2].isoformat()}
+            for r in rows
+        ]
+    except Exception as e:
+        print("⚠️ Erro ao listar prioridades:", e)
+        return []
+    finally:
+        release_connection(conn)
 
 
-# ------------------------------------------------------
-# 🔎 Consulta prioridades por agência
-# ------------------------------------------------------
-@app.route("/consultar_prioridades/<agencia>", methods=["GET"])
+# ==============================
+# 🌐 ROTAS FLASK
+# ==============================
+@app.route("/")
+def home():
+    return jsonify({"status": "API online ✅"})
+
+
+@app.route("/consultar_prioridades/<agencia>")
 def consultar_prioridades(agencia):
-    total = contar_prioridades_semana(agencia)
-    limite = get_limite_agencia(agencia)
-    atingiu_limite = "Sim" if total >= limite else "Não"
-    return jsonify({
-        "agencia": agencia,
-        "total_semana": total,
-        "limite_semana": limite,
-        "atingiu_limite": atingiu_limite
-    })
-
-
-# ------------------------------------------------------
-# 📝 Registra prioridade (somente "Sim")
-# ------------------------------------------------------
-@app.route("/registrar_prioridade", methods=["POST"])
-def registrar_prioridade():
-    dados = request.json
-    if not dados:
-        return jsonify({"erro": "Requisição inválida: envie um JSON."}), 400
-
-    agencia = dados.get("agencia")
-    prioridade = dados.get("prioridade")
-    processo_id = dados.get("processo_id")
-
-    if not agencia or prioridade not in ["Sim", "Não"]:
-        return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('Sim' ou 'Não')."}), 400
-
-    total = contar_prioridades_semana(agencia)
-    limite = get_limite_agencia(agencia)
-
-    if prioridade == "Não":
+    """Consulta as prioridades por agência."""
+    try:
+        total = contar_prioridades_semana(agencia)
+        prioridades = listar_prioridades(agencia)
         return jsonify({
-            "permitido": True,
-            "mensagem": "Prioridade marcada como 'Não' — não registrada no banco.",
+            "agencia": agencia,
             "total_semana": total,
-            "limite_semana": limite
+            "prioridades": prioridades
         })
-
-    if total >= limite:
-        return jsonify({
-            "permitido": False,
-            "mensagem": f"A agência {agencia} já atingiu seu limite semanal ({limite}).",
-            "total_semana": total,
-            "limite_semana": limite
-        })
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO prioridades (agencia, processo_id, prioridade, data)
-        VALUES (%s, %s, %s, %s)
-    """, (agencia, processo_id, "Sim", datetime.now()))
-    conn.commit()
-    conn.close()
-
-    total += 1
-    atingiu_limite = "Sim" if total >= limite else "Não"
-
-    return jsonify({
-        "permitido": True,
-        "mensagem": "Prioridade 'Sim' registrada com sucesso.",
-        "total_semana": total,
-        "limite_semana": limite,
-        "atingiu_limite": atingiu_limite
-    })
+    except Exception as e:
+        print("❌ Erro na rota /consultar_prioridades:", e)
+        return jsonify({"erro": "Erro interno"}), 500
 
 
-# ------------------------------------------------------
-# 📋 Lista todas as agências e seus limites
-# ------------------------------------------------------
-@app.route("/limites", methods=["GET"])
-def listar_limites():
-    return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
+@app.route("/limites")
+def limites():
+    """Exemplo de rota que retorna limites de alguma lógica."""
+    data = {
+        "limite_semanal": 20,
+        "limite_diario": 5,
+        "mensagem": "Limites carregados com sucesso"
+    }
+    return jsonify(data)
 
 
-# ------------------------------------------------------
-# 🧽 Rota manual para limpar registros antigos
-# ------------------------------------------------------
-@app.route("/limpar_banco", methods=["POST"])
-def rota_limpar_banco():
-    limpar_registros_antigos()
-    return jsonify({"mensagem": "Limpeza de registros antigos executada com sucesso."})
-
-
-# ------------------------------------------------------
-# 🚀 Inicialização automática
-# ------------------------------------------------------
-with app.app_context():
-    init_db()
-    limpar_registros_antigos()
-
+# ==============================
+# 🚀 INICIALIZAÇÃO
+# ==============================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    init_connection_pool()
+    criar_tabela_prioridades()
+    limpar_registros_antigos()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
