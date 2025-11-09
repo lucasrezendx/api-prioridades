@@ -1,155 +1,99 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from datetime import datetime, timedelta
-import psycopg2
-from psycopg2 import pool
+from supabase import create_client
 import os
 
+# -------------------------
+# CONFIGURAÇÕES INICIAIS
+# -------------------------
 app = Flask(__name__)
 CORS(app)
 
-# ------------------------------------------------------
-# ⚙️ Configuração do banco PostgreSQL (Supabase)
-# ------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("❌ Variável DATABASE_URL não configurada.")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Força SSL se não estiver presente
-if "sslmode" not in DATABASE_URL:
-    DATABASE_URL += "&sslmode=require" if "?" in DATABASE_URL else "?sslmode=require"
+# Nome da tabela no Supabase
+TABLE_NAME = "prioridades"
 
-# Cria um pool de conexões fixo
-try:
-    connection_pool = psycopg2.pool.SimpleConnectionPool(
-        minconn=1,
-        maxconn=10,
-        dsn=DATABASE_URL
-    )
-    print("✅ Pool de conexões PostgreSQL inicializado com sucesso.")
-except Exception as e:
-    print("❌ Erro ao criar pool de conexões:", e)
-    raise
+# -------------------------
+# FUNÇÕES AUXILIARES
+# -------------------------
 
-def get_connection():
-    """Obtém uma conexão do pool"""
-    return connection_pool.getconn()
-
-def release_connection(conn):
-    """Libera a conexão de volta ao pool"""
-    if conn:
-        connection_pool.putconn(conn)
-
-# ------------------------------------------------------
-# 🏦 Limites por agência
-# ------------------------------------------------------
-LIMITES_AGENCIAS = {
-    "CRESOL CORONEL VIVIDA": 5,
-    "CRESOL HONORIO SERPA": 3,
-    "CRESOL MANGUEIRINHA": 5,
-    "CRESOL CORONEL DOMINGOS SOARES": 3,
-    "CRESOL PALMAS": 3,
-    "CRESOL CLEVELANDIA": 5,
-    "CRESOL MARIOPOLIS": 3,
-    "CRESOL PATO BRANCO": 5,
-    "CRESOL PATO BRANCO SUL": 5,
-    "CRESOL PATO III": 3,
-    "CRESOL SORRISO": 5,
-    "CRESOL SINOP": 5,
-    "CRESOL LUCAS DO RIO VERDE": 5,
-    "CRESOL VERA": 3,
-    "CRESOL JUARA": 3,
-    "CRESOL TAPURAH": 2,
-    "CRESOL GUARANTA DO NORTE": 3,
-    "CRESOL JUINA": 2,
-    "CRESOL ALTA FLORESTA": 2,
-    "CRESOL COLÍDER": 2,
-    "CRESOL CONECTA": 3
-}
-LIMITE_PADRAO = 2
-
-# ------------------------------------------------------
-# 🧱 Inicializa tabela
-# ------------------------------------------------------
-def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS prioridades (
-            id SERIAL PRIMARY KEY,
-            agencia TEXT NOT NULL,
-            processo_id TEXT,
-            prioridade TEXT CHECK(prioridade IN ('Sim')),
-            data TIMESTAMP
-        );
-    """)
-    conn.commit()
-    release_connection(conn)
-    print("✅ Tabela 'prioridades' verificada/criada com sucesso.")
-
-# ------------------------------------------------------
-# 🧹 Limpeza
-# ------------------------------------------------------
 def limpar_registros_antigos():
-    conn = get_connection()
-    cursor = conn.cursor()
-    limite = datetime.now() - timedelta(days=14)
-    cursor.execute("DELETE FROM prioridades WHERE data < %s", (limite,))
-    apagados = cursor.rowcount
-    conn.commit()
-    release_connection(conn)
-    print(f"🧹 {apagados} registros antigos removidos (anteriores a {limite:%d/%m/%Y}).")
+    """Apaga registros com mais de 14 dias"""
+    limite_data = (datetime.utcnow() - timedelta(days=14)).isoformat()
+    supabase.table(TABLE_NAME).delete().lt("data_criacao", limite_data).execute()
 
-# ------------------------------------------------------
-# 📅 Contagem semanal
-# ------------------------------------------------------
-def contar_prioridades_semana(agencia):
-    conn = get_connection()
-    cursor = conn.cursor()
-    hoje = datetime.now()
-    segunda_atual = hoje - timedelta(days=hoje.weekday())
-    segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
-    cursor.execute("""
-        SELECT COUNT(*) FROM prioridades
-        WHERE UPPER(agencia) = UPPER(%s) AND prioridade = 'Sim' AND data >= %s
-    """, (agencia, segunda_atual))
-    total = cursor.fetchone()[0]
-    release_connection(conn)
-    return total
+def limitar_registros(max_registros=1000):
+    """Mantém o número máximo de registros"""
+    res = supabase.table(TABLE_NAME).select("id, data_criacao").order("data_criacao", desc=False).execute()
+    registros = res.data or []
+    if len(registros) > max_registros:
+        ids_para_apagar = [r["id"] for r in registros[:len(registros) - max_registros]]
+        supabase.table(TABLE_NAME).delete().in_("id", ids_para_apagar).execute()
 
-# ------------------------------------------------------
-# Rotas Flask
-# ------------------------------------------------------
-@app.route("/consultar_prioridades/<agencia>")
-def consultar_prioridades(agencia):
+def criar_tabela_se_nao_existir():
+    """
+    O Supabase cria as tabelas via SQL no painel,
+    então aqui apenas garantimos que o código não quebre.
+    """
     try:
-        total = contar_prioridades_semana(agencia)
-        limite = LIMITES_AGENCIAS.get(agencia.upper().strip(), LIMITE_PADRAO)
-        atingiu = "Sim" if total >= limite else "Não"
-        return jsonify({
-            "agencia": agencia,
-            "total_semana": total,
-            "limite_semana": limite,
-            "atingiu_limite": atingiu
-        })
+        supabase.table(TABLE_NAME).select("*").limit(1).execute()
+    except Exception as e:
+        print("⚠️ Certifique-se de que a tabela 'prioridades' existe no Supabase:", e)
+
+# -------------------------
+# ROTAS DA API
+# -------------------------
+
+@app.route("/consultar_prioridades", methods=["GET"])
+def consultar_prioridades():
+    """Lista todas as prioridades"""
+    try:
+        limpar_registros_antigos()
+        limitar_registros()
+
+        res = supabase.table(TABLE_NAME).select("*").order("data_criacao", desc=True).execute()
+        return jsonify(res.data)
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
-@app.route("/limites")
-def limites():
-    return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
 
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok"})
+@app.route("/registrar_prioridade", methods=["POST"])
+def registrar_prioridade():
+    """Registra uma nova prioridade"""
+    try:
+        dados = request.get_json()
+        descricao = dados.get("descricao")
 
-# ------------------------------------------------------
-# Inicialização automática
-# ------------------------------------------------------
-with app.app_context():
-    init_db()
-    limpar_registros_antigos()
+        if not descricao:
+            return jsonify({"erro": "Campo 'descricao' é obrigatório."}), 400
 
+        novo_registro = {
+            "descricao": descricao,
+            "data_criacao": datetime.utcnow().isoformat()
+        }
+
+        supabase.table(TABLE_NAME).insert(novo_registro).execute()
+
+        limpar_registros_antigos()
+        limitar_registros()
+
+        return jsonify({"mensagem": "Prioridade registrada com sucesso!"})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "API online e conectada ao Supabase via HTTPS!"})
+
+
+# -------------------------
+# INICIALIZAÇÃO
+# -------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    criar_tabela_se_nao_existir()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
