@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import psycopg2
+from psycopg2 import pool
 import os
 
 app = Flask(__name__)
@@ -11,18 +12,36 @@ CORS(app)
 # ⚙️ Configuração do banco PostgreSQL (Supabase)
 # ------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("❌ Variável DATABASE_URL não configurada.")
+
+# Força SSL se não estiver presente
+if "sslmode" not in DATABASE_URL:
+    DATABASE_URL += "&sslmode=require" if "?" in DATABASE_URL else "?sslmode=require"
+
+# Cria um pool de conexões fixo
+try:
+    connection_pool = psycopg2.pool.SimpleConnectionPool(
+        minconn=1,
+        maxconn=10,
+        dsn=DATABASE_URL
+    )
+    print("✅ Pool de conexões PostgreSQL inicializado com sucesso.")
+except Exception as e:
+    print("❌ Erro ao criar pool de conexões:", e)
+    raise
 
 def get_connection():
-    if not DATABASE_URL:
-        raise ValueError("❌ Variável de ambiente DATABASE_URL não configurada.")
-    conn_str = DATABASE_URL
-    if "sslmode" not in conn_str:
-        conn_str += "&sslmode=require" if "?" in conn_str else "?sslmode=require"
-    return psycopg2.connect(conn_str)
+    """Obtém uma conexão do pool"""
+    return connection_pool.getconn()
 
+def release_connection(conn):
+    """Libera a conexão de volta ao pool"""
+    if conn:
+        connection_pool.putconn(conn)
 
 # ------------------------------------------------------
-# 🏦 Limites por agência (definidos no código)
+# 🏦 Limites por agência
 # ------------------------------------------------------
 LIMITES_AGENCIAS = {
     "CRESOL CORONEL VIVIDA": 5,
@@ -47,59 +66,42 @@ LIMITES_AGENCIAS = {
     "CRESOL COLÍDER": 2,
     "CRESOL CONECTA": 3
 }
-
 LIMITE_PADRAO = 2
 
-
 # ------------------------------------------------------
-# 🧱 Cria a tabela se não existir
+# 🧱 Inicializa tabela
 # ------------------------------------------------------
 def init_db():
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prioridades (
-                id SERIAL PRIMARY KEY,
-                agencia TEXT NOT NULL,
-                processo_id TEXT,
-                prioridade TEXT CHECK(prioridade IN ('Sim')),
-                data TIMESTAMP
-            );
-        """)
-        conn.commit()
-        conn.close()
-        print("✅ Tabela 'prioridades' verificada/criada com sucesso.")
-    except Exception as e:
-        print("❌ Erro ao criar tabela 'prioridades':", e)
-
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS prioridades (
+            id SERIAL PRIMARY KEY,
+            agencia TEXT NOT NULL,
+            processo_id TEXT,
+            prioridade TEXT CHECK(prioridade IN ('Sim')),
+            data TIMESTAMP
+        );
+    """)
+    conn.commit()
+    release_connection(conn)
+    print("✅ Tabela 'prioridades' verificada/criada com sucesso.")
 
 # ------------------------------------------------------
-# 🧹 Remove registros com mais de 14 dias
+# 🧹 Limpeza
 # ------------------------------------------------------
 def limpar_registros_antigos():
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        limite = datetime.now() - timedelta(days=14)
-        cursor.execute("DELETE FROM prioridades WHERE data < %s", (limite,))
-        apagados = cursor.rowcount
-        conn.commit()
-        conn.close()
-        print(f"🧹 {apagados} registros antigos removidos (anteriores a {limite:%d/%m/%Y}).")
-    except Exception as e:
-        print("❌ Erro ao limpar registros antigos:", e)
-
+    conn = get_connection()
+    cursor = conn.cursor()
+    limite = datetime.now() - timedelta(days=14)
+    cursor.execute("DELETE FROM prioridades WHERE data < %s", (limite,))
+    apagados = cursor.rowcount
+    conn.commit()
+    release_connection(conn)
+    print(f"🧹 {apagados} registros antigos removidos (anteriores a {limite:%d/%m/%Y}).")
 
 # ------------------------------------------------------
-# ⚖️ Retorna o limite da agência (ou padrão se não estiver na lista)
-# ------------------------------------------------------
-def get_limite_agencia(agencia):
-    return LIMITES_AGENCIAS.get(agencia.upper().strip(), LIMITE_PADRAO)
-
-
-# ------------------------------------------------------
-# 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
+# 📅 Contagem semanal
 # ------------------------------------------------------
 def contar_prioridades_semana(agencia):
     conn = get_connection()
@@ -107,107 +109,42 @@ def contar_prioridades_semana(agencia):
     hoje = datetime.now()
     segunda_atual = hoje - timedelta(days=hoje.weekday())
     segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
-
     cursor.execute("""
         SELECT COUNT(*) FROM prioridades
         WHERE UPPER(agencia) = UPPER(%s) AND prioridade = 'Sim' AND data >= %s
     """, (agencia, segunda_atual))
     total = cursor.fetchone()[0]
-    conn.close()
+    release_connection(conn)
     return total
 
-
 # ------------------------------------------------------
-# 🔎 Consulta prioridades por agência
+# Rotas Flask
 # ------------------------------------------------------
-@app.route("/consultar_prioridades/<agencia>", methods=["GET"])
+@app.route("/consultar_prioridades/<agencia>")
 def consultar_prioridades(agencia):
-    total = contar_prioridades_semana(agencia)
-    limite = get_limite_agencia(agencia)
-    atingiu_limite = "Sim" if total >= limite else "Não"
-    return jsonify({
-        "agencia": agencia,
-        "total_semana": total,
-        "limite_semana": limite,
-        "atingiu_limite": atingiu_limite
-    })
-
-
-# ------------------------------------------------------
-# 📝 Registra prioridade (somente "Sim")
-# ------------------------------------------------------
-@app.route("/registrar_prioridade", methods=["POST"])
-def registrar_prioridade():
-    dados = request.json
-    if not dados:
-        return jsonify({"erro": "Requisição inválida: envie um JSON."}), 400
-
-    agencia = dados.get("agencia")
-    prioridade = dados.get("prioridade")
-    processo_id = dados.get("processo_id")
-
-    if not agencia or prioridade not in ["Sim", "Não"]:
-        return jsonify({"erro": "Campos obrigatórios: agencia e prioridade ('Sim' ou 'Não')."}), 400
-
-    total = contar_prioridades_semana(agencia)
-    limite = get_limite_agencia(agencia)
-
-    if prioridade == "Não":
+    try:
+        total = contar_prioridades_semana(agencia)
+        limite = LIMITES_AGENCIAS.get(agencia.upper().strip(), LIMITE_PADRAO)
+        atingiu = "Sim" if total >= limite else "Não"
         return jsonify({
-            "permitido": True,
-            "mensagem": "Prioridade marcada como 'Não' — não registrada no banco.",
+            "agencia": agencia,
             "total_semana": total,
-            "limite_semana": limite
+            "limite_semana": limite,
+            "atingiu_limite": atingiu
         })
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
-    if total >= limite:
-        return jsonify({
-            "permitido": False,
-            "mensagem": f"A agência {agencia} já atingiu seu limite semanal ({limite}).",
-            "total_semana": total,
-            "limite_semana": limite
-        })
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO prioridades (agencia, processo_id, prioridade, data)
-        VALUES (%s, %s, %s, %s)
-    """, (agencia, processo_id, "Sim", datetime.now()))
-    conn.commit()
-    conn.close()
-
-    total += 1
-    atingiu_limite = "Sim" if total >= limite else "Não"
-
-    return jsonify({
-        "permitido": True,
-        "mensagem": "Prioridade 'Sim' registrada com sucesso.",
-        "total_semana": total,
-        "limite_semana": limite,
-        "atingiu_limite": atingiu_limite
-    })
-
-
-# ------------------------------------------------------
-# 📋 Lista todas as agências e seus limites
-# ------------------------------------------------------
-@app.route("/limites", methods=["GET"])
-def listar_limites():
+@app.route("/limites")
+def limites():
     return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
 
 # ------------------------------------------------------
-# 🧽 Rota manual para limpar registros antigos
-# ------------------------------------------------------
-@app.route("/limpar_banco", methods=["POST"])
-def rota_limpar_banco():
-    limpar_registros_antigos()
-    return jsonify({"mensagem": "Limpeza de registros antigos executada com sucesso."})
-
-
-# ------------------------------------------------------
-# 🚀 Inicialização automática
+# Inicialização automática
 # ------------------------------------------------------
 with app.app_context():
     init_db()
