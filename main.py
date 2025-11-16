@@ -20,7 +20,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 TABLE_NAME = "prioridades"
 
 # ------------------------------------------------------
-# 🏦 Limites por agência (iguais ao seu código original)
+# 🏦 Limites por agência
 # ------------------------------------------------------
 LIMITES_AGENCIAS = {
     "CRESOL CORONEL VIVIDA": 5,
@@ -48,29 +48,39 @@ LIMITES_AGENCIAS = {
 
 LIMITE_PADRAO = 2
 
-
 # ------------------------------------------------------
-# 🧹 Remove registros com mais de 14 dias
+# 🧹 Remover registros antigos (tudo que não é da semana atual)
 # ------------------------------------------------------
 def limpar_registros_antigos():
     try:
-        limite = (datetime.utcnow() - timedelta(days=14)).isoformat()
-        res = supabase.table(TABLE_NAME).delete().lt("data", limite).execute()
+        hoje = datetime.utcnow()
+
+        # Segunda-feira da semana atual
+        segunda_atual = hoje - timedelta(days=hoje.weekday())
+        segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
+        segunda_iso = segunda_atual.isoformat()
+
+        res = (
+            supabase.table(TABLE_NAME)
+            .delete()
+            .lt("data", segunda_iso)
+            .execute()
+        )
+
         apagados = len(res.data or [])
-        print(f"🧹 {apagados} registros antigos removidos (anteriores a {limite}).")
+        print(f"🧹 {apagados} registros removidos (anteriores à segunda-feira atual: {segunda_iso}).")
+
     except Exception as e:
         print("❌ Erro ao limpar registros antigos:", e)
 
-
 # ------------------------------------------------------
-# ⚖️ Retorna o limite da agência
+# ⚖️ Limite da agência
 # ------------------------------------------------------
 def get_limite_agencia(agencia):
     return LIMITES_AGENCIAS.get(agencia.upper().strip(), LIMITE_PADRAO)
 
-
 # ------------------------------------------------------
-# 📅 Conta quantas prioridades "Sim" a agência teve na semana atual
+# 📅 Contar prioridades da semana
 # ------------------------------------------------------
 def contar_prioridades_semana(agencia):
     try:
@@ -93,6 +103,24 @@ def contar_prioridades_semana(agencia):
         print("❌ Erro ao contar prioridades:", e)
         return 0
 
+# ------------------------------------------------------
+# 🔎 Verifica se processo já possui prioridade registrada
+# ------------------------------------------------------
+def processo_ja_registrado(processo_id):
+    try:
+        if not processo_id:
+            return False
+
+        res = (
+            supabase.table(TABLE_NAME)
+            .select("id")
+            .eq("processo_id", processo_id)
+            .execute()
+        )
+        return len(res.data or []) > 0
+    except Exception as e:
+        print("❌ Erro ao verificar processo existente:", e)
+        return False
 
 # ------------------------------------------------------
 # 🔎 Consulta prioridades por agência
@@ -109,9 +137,8 @@ def consultar_prioridades(agencia):
         "atingiu_limite": atingiu_limite
     })
 
-
 # ------------------------------------------------------
-# 📝 Registra prioridade (somente "Sim")
+# 📝 Registrar prioridade
 # ------------------------------------------------------
 @app.route("/registrar_prioridade", methods=["POST"])
 def registrar_prioridade():
@@ -130,6 +157,7 @@ def registrar_prioridade():
         total = contar_prioridades_semana(agencia)
         limite = get_limite_agencia(agencia)
 
+        # Se prioridade for "Não", não registra
         if prioridade == "Não":
             return jsonify({
                 "permitido": True,
@@ -138,6 +166,16 @@ def registrar_prioridade():
                 "limite_semana": limite
             })
 
+        # Evita registrar o mesmo processo duas vezes
+        if processo_ja_registrado(processo_id):
+            return jsonify({
+                "permitido": False,
+                "mensagem": f"O processo {processo_id} já possui prioridade registrada. Nada será adicionado.",
+                "total_semana": total,
+                "limite_semana": limite
+            })
+
+        # Respeita limite semanal
         if total >= limite:
             return jsonify({
                 "permitido": False,
@@ -168,23 +206,20 @@ def registrar_prioridade():
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
-
 # ------------------------------------------------------
-# 📋 Lista todas as agências e seus limites
+# 📋 Listar limites
 # ------------------------------------------------------
 @app.route("/limites", methods=["GET"])
 def listar_limites():
     return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
 
-
 # ------------------------------------------------------
-# 🧽 Rota manual para limpar registros antigos
+# 🧽 Limpeza manual
 # ------------------------------------------------------
 @app.route("/limpar_banco", methods=["POST"])
 def rota_limpar_banco():
     limpar_registros_antigos()
     return jsonify({"mensagem": "Limpeza de registros antigos executada com sucesso."})
-
 
 # ------------------------------------------------------
 # 🚀 Inicialização automática
@@ -195,7 +230,6 @@ with app.app_context():
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "API online e conectada ao Supabase!"})
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
