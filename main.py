@@ -7,6 +7,9 @@ import os
 app = Flask(__name__)
 CORS(app)
 
+# Permite que rotas funcionem mesmo com barra final
+app.url_map.strict_slashes = False
+
 # ------------------------------------------------------
 # ⚙️ Configuração do Supabase
 # ------------------------------------------------------
@@ -49,13 +52,11 @@ LIMITES_AGENCIAS = {
 LIMITE_PADRAO = 2
 
 # ------------------------------------------------------
-# 🧹 Remover registros antigos (tudo que não é da semana atual)
+# 🧹 Remover registros antigos
 # ------------------------------------------------------
 def limpar_registros_antigos():
     try:
         hoje = datetime.utcnow()
-
-        # Segunda-feira da semana atual
         segunda_atual = hoje - timedelta(days=hoje.weekday())
         segunda_atual = datetime(segunda_atual.year, segunda_atual.month, segunda_atual.day)
         segunda_iso = segunda_atual.isoformat()
@@ -68,7 +69,7 @@ def limpar_registros_antigos():
         )
 
         apagados = len(res.data or [])
-        print(f"🧹 {apagados} registros removidos (anteriores à segunda-feira atual: {segunda_iso}).")
+        print(f"🧹 {apagados} registros removidos (anteriores à segunda-feira atual).")
 
     except Exception as e:
         print("❌ Erro ao limpar registros antigos:", e)
@@ -104,7 +105,7 @@ def contar_prioridades_semana(agencia):
         return 0
 
 # ------------------------------------------------------
-# 🔎 Verifica se processo já possui prioridade registrada
+# 🔎 Verifica processo existente
 # ------------------------------------------------------
 def processo_ja_registrado(processo_id):
     try:
@@ -157,34 +158,30 @@ def registrar_prioridade():
         total = contar_prioridades_semana(agencia)
         limite = get_limite_agencia(agencia)
 
-        # Se prioridade for "Não", não registra
         if prioridade == "Não":
             return jsonify({
                 "permitido": True,
-                "mensagem": "Prioridade marcada como 'Não' — não registrada no banco.",
+                "mensagem": "Prioridade marcada como 'Não' — não registrada.",
                 "total_semana": total,
                 "limite_semana": limite
             })
 
-        # Evita registrar o mesmo processo duas vezes
         if processo_ja_registrado(processo_id):
             return jsonify({
                 "permitido": False,
-                "mensagem": f"O processo {processo_id} já possui prioridade registrada. Nada será adicionado.",
+                "mensagem": f"O processo {processo_id} já possui prioridade registrada.",
                 "total_semana": total,
                 "limite_semana": limite
             })
 
-        # Respeita limite semanal
         if total >= limite:
             return jsonify({
                 "permitido": False,
-                "mensagem": f"A agência {agencia} já atingiu seu limite semanal ({limite}).",
+                "mensagem": f"A agência {agencia} já atingiu o limite semanal ({limite}).",
                 "total_semana": total,
                 "limite_semana": limite
             })
 
-        # Inserir novo registro
         novo = {
             "agencia": agencia,
             "processo_id": processo_id,
@@ -194,15 +191,15 @@ def registrar_prioridade():
         supabase.table(TABLE_NAME).insert(novo).execute()
 
         total += 1
-        atingiu_limite = "Sim" if total >= limite else "Não"
 
         return jsonify({
             "permitido": True,
-            "mensagem": "Prioridade 'Sim' registrada com sucesso.",
+            "mensagem": "Prioridade registrada com sucesso.",
             "total_semana": total,
             "limite_semana": limite,
-            "atingiu_limite": atingiu_limite
+            "atingiu_limite": "Sim" if total >= limite else "Não"
         })
+
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
@@ -214,12 +211,18 @@ def listar_limites():
     return jsonify({**LIMITES_AGENCIAS, "_PADRAO_": LIMITE_PADRAO})
 
 # ------------------------------------------------------
-# 🧽 Limpeza manual
+# 🧽 Limpeza manual (AGORA FUNCIONA PELO NAVEGADOR)
 # ------------------------------------------------------
-@app.route("/limpar_banco", methods=["POST"])
+@app.route("/limpar_banco", methods=["GET", "POST", "OPTIONS"])
 def rota_limpar_banco():
+    # Preflight CORS
+    if request.method == "OPTIONS":
+        return ('', 204)
+
+    # Executar limpeza (GET ou POST)
     limpar_registros_antigos()
-    return jsonify({"mensagem": "Limpeza de registros antigos executada com sucesso."})
+
+    return jsonify({"mensagem": "Limpeza executada com sucesso."})
 
 # ------------------------------------------------------
 # 🚀 Inicialização automática
