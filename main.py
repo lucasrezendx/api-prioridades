@@ -26,27 +26,27 @@ TABLE_NAME = "prioridades"
 # 🏦 Limites por agência
 # ------------------------------------------------------
 LIMITES_AGENCIAS = {
-    "CRESOL CORONEL VIVIDA": 5,
-    "CRESOL HONORIO SERPA": 3,
-    "CRESOL MANGUEIRINHA": 5,
-    "CRESOL CORONEL DOMINGOS SOARES": 3,
-    "CRESOL PALMAS": 3,
-    "CRESOL CLEVELANDIA": 5,
-    "CRESOL MARIOPOLIS": 3,
-    "CRESOL PATO BRANCO": 5,
-    "CRESOL PATO BRANCO SUL": 5,
-    "CRESOL PATO III": 3,
-    "CRESOL SORRISO": 5,
-    "CRESOL SINOP": 5,
-    "CRESOL LUCAS DO RIO VERDE": 5,
-    "CRESOL VERA": 3,
-    "CRESOL JUARA": 3,
-    "CRESOL TAPURAH": 2,
-    "CRESOL GUARANTA DO NORTE": 3,
-    "CRESOL JUINA": 2,
-    "CRESOL ALTA FLORESTA": 2,
-    "CRESOL COLÍDER": 2,
-    "CRESOL CONECTA": 3
+    "CORONEL VIVIDA": 5,
+    "HONÓRIO SERPA": 3,
+    "MANGUEIRINHA": 5,
+    "CORONEL DOMINGOS SOARES": 3,
+    "PALMAS": 3,
+    "CLEVELÂNDIA": 5,
+    "MARIÓPOLIS": 3,
+    "PATO BRANCO": 5,
+    "PATO BRANCO SUL": 5,
+    "PATO III": 3,
+    "SORRISO": 5,
+    "SINOP": 5,
+    "LUCAS DO RIO VERDE": 5,
+    "VERA": 3,
+    "JUARA": 3,
+    "TAPURAH": 2,
+    "GUARANTA DO NORTE": 3,
+    "JUINA": 2,
+    "ALTA FLORESTA": 2,
+    "COLIDER": 2,
+    "CONECTA": 3
 }
 
 LIMITE_PADRAO = 2
