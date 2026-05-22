@@ -35,7 +35,7 @@ LIMITES_AGENCIAS = {
     "MARIÓPOLIS": 3,
     "PATO BRANCO": 5,
     "PATO BRANCO SUL": 5,
-    "PATO III": 3,
+    "PATO BRANCO III": 3,
     "SORRISO": 5,
     "SINOP": 5,
     "LUCAS DO RIO VERDE": 5,
